@@ -10,7 +10,7 @@ REPO=kita-pickup
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/notifier:$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
 RUN_SA="notifier-run@$PROJECT.iam.gserviceaccount.com"
 SCHED_SA="scheduler-invoker@$PROJECT.iam.gserviceaccount.com"
-SCHEDULE="${SCHEDULE:-*/5 14 * * 1-5}"   # every 5 min, 14:00-14:55, Mon-Fri, Europe/Berlin
+SCHEDULE="${SCHEDULE:-*/5 7-8,14 * * 1-5}"   # every 5 min 07:00-08:55 + 14:00-14:55, Mon-Fri, Europe/Berlin; must cover each trip's push time
 g() { gcloud --project "$PROJECT" --quiet "$@"; }
 
 echo "== project"
@@ -46,7 +46,7 @@ g storage buckets add-iam-policy-binding "gs://$STATE_BUCKET" --member "serviceA
 
 echo "== cloud run job"
 ENVFILE=$(mktemp)
-for k in FROM_LAT FROM_LON FROM_NAME TO_LAT TO_LON TO_NAME ARRIVE_BY BUFFER_MIN LEAD_MIN FALLBACK_LEAVE SKIP_DATES TELEGRAM_TOKEN TELEGRAM_CHAT_IDS STATE_BUCKET; do
+for k in FROM_LAT FROM_LON FROM_NAME TO_LAT TO_LON TO_NAME TRIPS BUFFER_MIN LEAD_MIN FALLBACK_MIN SKIP_DATES TELEGRAM_TOKEN TELEGRAM_CHAT_IDS STATE_BUCKET; do
   printf '%s: "%s"\n' "$k" "${!k:-}" >> "$ENVFILE"
 done
 g run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" --service-account "$RUN_SA" \

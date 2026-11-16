@@ -76,3 +76,38 @@ func TestSkipReason(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTrips(t *testing.T) {
+	got, err := parseTrips("drop-off@08:50, pickup@15:15")
+	if err != nil || len(got) != 2 || got[0] != (Trip{"drop-off", "08:50"}) || got[1] != (Trip{"pickup", "15:15"}) {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	for _, bad := range []string{"", "pickup", "pickup@25:00", "@08:50"} {
+		if _, err := parseTrips(bad); err == nil {
+			t.Errorf("%q: want error", bad)
+		}
+	}
+	if l := (Trip{Name: "drop-off"}).Label(); l != "Drop-off" {
+		t.Errorf("label %q", l)
+	}
+}
+
+func TestActiveTrip(t *testing.T) {
+	trips := []Trip{{"drop-off", "08:50"}, {"pickup", "15:15"}}
+	for now, want := range map[string]string{
+		"07:00": "", // before the 90 min window
+		"07:20": "drop-off",
+		"08:20": "drop-off",
+		"08:50": "drop-off",
+		"08:55": "",
+		"12:00": "",
+		"14:00": "pickup",
+		"14:55": "pickup",
+		"15:20": "",
+	} {
+		tr, _, ok := activeTrip(*at(now), trips, 90*time.Minute)
+		if (want == "") == ok || tr.Name != want {
+			t.Errorf("%s: got %q ok=%v, want %q", now, tr.Name, ok, want)
+		}
+	}
+}

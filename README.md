@@ -1,18 +1,19 @@
 # kita-pickup-notifier
 
-Weekday Telegram notification telling you when to leave the house for kita pickup, based on live BVG (Berlin) departures.
+Weekday Telegram message telling you when to leave the house for each kita trip (morning drop-off, afternoon pickup), based on live BVG (Berlin) departures.
 
 ```
-Cloud Scheduler (*/5 14 * * 1-5, Europe/Berlin)
+Cloud Scheduler (*/5 7-8,14 * * 1-5, Europe/Berlin)
    └─▶ Cloud Run job (Go, stateless, ~3 s)
          1. skip weekends, Berlin public holidays, SKIP_DATES
-         2. already sent today? (date in gs://$STATE_BUCKET/last-sent)
-         3. v6.bvg.transport.rest /journeys arriving by ARRIVE_BY - BUFFER_MIN
-         4. pick the latest-leaving trip (no walk-only, no cancelled legs)
-         5. if now >= leave - LEAD_MIN → Telegram bot message, then record today
+         2. which trip's window (ARRIVE_BY - 90 min .. ARRIVE_BY) is now? (TRIPS=drop-off@08:50,pickup@15:15)
+         3. already sent today? (date in gs://$STATE_BUCKET/last-sent-<trip>)
+         4. v6.bvg.transport.rest /journeys arriving by ARRIVE_BY - BUFFER_MIN
+         5. pick the latest-leaving trip (no walk-only, no cancelled legs)
+         6. if now >= leave - LEAD_MIN → Telegram bot message, then record today
 ```
 
-If BVG is down and `FALLBACK_LEAVE` is set, a generic "leave at HH:MM" push goes out instead.
+If BVG is down, a generic "leave at <arrive-by - FALLBACK_MIN>" message goes out instead. Adding a trip: add it to `TRIPS` and make sure `SCHEDULE` in deploy.sh covers its push time.
 
 ## Phone
 1. Create a bot with @BotFather (`/newbot`), put the token in `.env` as `TELEGRAM_TOKEN`.

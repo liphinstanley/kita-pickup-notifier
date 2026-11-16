@@ -11,9 +11,10 @@ import (
 	"strings"
 )
 
-// The only state: object "last-sent" in STATE_BUCKET holding the date
-// (YYYY-MM-DD) of the last successful push. Plain GCS JSON API, no SDK.
-const stateObject = "last-sent"
+// The only state: one object per trip, "last-sent-<trip>" in STATE_BUCKET,
+// holding the date (YYYY-MM-DD) of that trip's last message. Plain GCS JSON
+// API, no SDK.
+func stateObject(trip string) string { return "last-sent-" + trip }
 
 // gcsToken returns an OAuth token: GOOGLE_OAUTH_TOKEN if set (local runs:
 // `gcloud auth print-access-token`), else the Cloud Run metadata server.
@@ -38,12 +39,12 @@ func gcsToken(ctx context.Context, c *http.Client) (string, error) {
 	return tok.AccessToken, nil
 }
 
-func lastSent(ctx context.Context, c *http.Client, cfg Config) (string, error) {
+func lastSent(ctx context.Context, c *http.Client, cfg Config, trip string) (string, error) {
 	tok, err := gcsToken(ctx, c)
 	if err != nil {
 		return "", err
 	}
-	u := fmt.Sprintf("https://storage.googleapis.com/storage/v1/b/%s/o/%s?alt=media", cfg.StateBucket, stateObject)
+	u := fmt.Sprintf("https://storage.googleapis.com/storage/v1/b/%s/o/%s?alt=media", cfg.StateBucket, url.PathEscape(stateObject(trip)))
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := c.Do(req)
@@ -61,13 +62,13 @@ func lastSent(ctx context.Context, c *http.Client, cfg Config) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-func markSent(ctx context.Context, c *http.Client, cfg Config, day string) error {
+func markSent(ctx context.Context, c *http.Client, cfg Config, trip, day string) error {
 	tok, err := gcsToken(ctx, c)
 	if err != nil {
 		return err
 	}
 	u := fmt.Sprintf("https://storage.googleapis.com/upload/storage/v1/b/%s/o?uploadType=media&name=%s",
-		cfg.StateBucket, url.QueryEscape(stateObject))
+		cfg.StateBucket, url.QueryEscape(stateObject(trip)))
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(day))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "text/plain")
