@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -39,7 +40,8 @@ func publish(ctx context.Context, c *http.Client, cfg Config, m Message) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ntfy publish: HTTP %d", resp.StatusCode)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("ntfy publish: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
 }
