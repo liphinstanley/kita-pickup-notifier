@@ -29,6 +29,7 @@ type Config struct {
 	FallbackLeave              string        // "14:45": used if BVG is down, empty = off
 	SkipDates                  []string      // YYYY-MM-DD, e.g. kita closing days
 	NtfyServer, NtfyTopic      string
+	NtfyToken                  string // ntfy access token (tk_...), avoids per-IP quotas
 	BVGAPI                     string
 	DryRun                     bool
 	Now                        string // override for testing, "2006-01-02T15:04"
@@ -63,6 +64,7 @@ func loadConfig() Config {
 		FallbackLeave: os.Getenv("FALLBACK_LEAVE"),
 		NtfyServer:    strings.TrimRight(env("NTFY_SERVER", "https://ntfy.sh"), "/"),
 		NtfyTopic:     os.Getenv("NTFY_TOPIC"),
+		NtfyToken:     os.Getenv("NTFY_TOKEN"),
 		BVGAPI:        strings.TrimRight(env("BVG_API", "https://v6.bvg.transport.rest"), "/"),
 		DryRun:        os.Getenv("DRY_RUN") == "1",
 		Now:           os.Getenv("NOW"),

@@ -39,7 +39,7 @@ done
 
 echo "== cloud run job"
 ENVFILE=$(mktemp)
-for k in FROM_LAT FROM_LON FROM_NAME TO_LAT TO_LON TO_NAME ARRIVE_BY BUFFER_MIN LEAD_MIN FALLBACK_LEAVE SKIP_DATES NTFY_TOPIC; do
+for k in FROM_LAT FROM_LON FROM_NAME TO_LAT TO_LON TO_NAME ARRIVE_BY BUFFER_MIN LEAD_MIN FALLBACK_LEAVE SKIP_DATES NTFY_TOPIC NTFY_TOKEN; do
   printf '%s: "%s"\n' "$k" "${!k:-}" >> "$ENVFILE"
 done
 g run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" --service-account "$RUN_SA" \

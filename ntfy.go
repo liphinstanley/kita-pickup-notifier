@@ -28,6 +28,7 @@ func publish(ctx context.Context, c *http.Client, cfg Config, m Message) error {
 	if err != nil {
 		return err
 	}
+	authorize(req, cfg)
 	req.Header.Set("Title", m.Title)
 	req.Header.Set("Priority", m.Priority)
 	req.Header.Set("Tags", strings.Join(m.Tags, ","))
@@ -54,6 +55,7 @@ func alreadySent(ctx context.Context, c *http.Client, cfg Config, since time.Tim
 	if err != nil {
 		return false, err
 	}
+	authorize(req, cfg)
 	resp, err := c.Do(req)
 	if err != nil {
 		return false, err
@@ -73,4 +75,12 @@ func alreadySent(ctx context.Context, c *http.Client, cfg Config, since time.Tim
 		}
 	}
 	return false, sc.Err()
+}
+
+// authorize attaches the ntfy access token. Logged-in requests count against
+// the account's quota instead of the (shared) Cloud Run egress IP's.
+func authorize(req *http.Request, cfg Config) {
+	if cfg.NtfyToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.NtfyToken)
+	}
 }
