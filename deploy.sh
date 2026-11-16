@@ -16,7 +16,7 @@ g() { gcloud --project "$PROJECT" --quiet "$@"; }
 echo "== project"
 gcloud projects describe "$PROJECT" >/dev/null 2>&1 || gcloud projects create "$PROJECT" --name "kita-pickup"
 gcloud billing projects link "$PROJECT" --billing-account "$BILLING_ACCOUNT" >/dev/null
-g services enable run.googleapis.com cloudscheduler.googleapis.com artifactregistry.googleapis.com
+g services enable run.googleapis.com cloudscheduler.googleapis.com artifactregistry.googleapis.com storage.googleapis.com
 
 echo "== artifact registry"
 if ! g artifacts repositories describe "$REPO" --location "$REGION" >/dev/null 2>&1; then
@@ -37,9 +37,15 @@ for sa in notifier-run scheduler-invoker; do
   g iam service-accounts describe "$sa@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 || g iam service-accounts create "$sa"
 done
 
+echo "== state bucket gs://$STATE_BUCKET (us-central1 = always-free tier)"
+if ! g storage buckets describe "gs://$STATE_BUCKET" >/dev/null 2>&1; then
+  g storage buckets create "gs://$STATE_BUCKET" --location us-central1 --uniform-bucket-level-access --public-access-prevention
+fi
+g storage buckets add-iam-policy-binding "gs://$STATE_BUCKET" --member "serviceAccount:$RUN_SA" --role roles/storage.objectUser >/dev/null
+
 echo "== cloud run job"
 ENVFILE=$(mktemp)
-for k in FROM_LAT FROM_LON FROM_NAME TO_LAT TO_LON TO_NAME ARRIVE_BY BUFFER_MIN LEAD_MIN FALLBACK_LEAVE SKIP_DATES NTFY_TOPIC NTFY_TOKEN; do
+for k in FROM_LAT FROM_LON FROM_NAME TO_LAT TO_LON TO_NAME ARRIVE_BY BUFFER_MIN LEAD_MIN FALLBACK_LEAVE SKIP_DATES TELEGRAM_TOKEN TELEGRAM_CHAT_IDS STATE_BUCKET; do
   printf '%s: "%s"\n' "$k" "${!k:-}" >> "$ENVFILE"
 done
 g run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" --service-account "$RUN_SA" \
@@ -55,4 +61,4 @@ g scheduler jobs "$verb" http "$JOB" --location "$REGION" --schedule "$SCHEDULE"
   --uri "$URI" --http-method POST --oauth-service-account-email "$SCHED_SA" \
   --oauth-token-scope https://www.googleapis.com/auth/cloud-platform >/dev/null
 
-echo "done. Subscribe to ntfy topic: $NTFY_TOPIC"
+echo "done. Test: gcloud run jobs execute $JOB --project $PROJECT --region $REGION --update-env-vars TEST=1 --wait"

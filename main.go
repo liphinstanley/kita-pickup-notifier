@@ -2,9 +2,9 @@
 // afternoon kita pickup, based on live BVG departures.
 //
 // It is meant to run every 5 minutes in the pickup window (Cloud Scheduler →
-// Cloud Run job). Each run is stateless: it checks whether today's push already
-// went out (via ntfy's cache), asks BVG for the latest trip that still arrives
-// in time, and sends the push once "now" is within LEAD_MIN of leaving.
+// Cloud Run job). Each run checks whether today's push already went out (a
+// date in a GCS object), asks BVG for the latest trip that still arrives in
+// time, and sends a Telegram message once "now" is within LEAD_MIN of leaving.
 package main
 
 import (
@@ -28,8 +28,10 @@ type Config struct {
 	Lead                       time.Duration // push this long before leaving
 	FallbackLeave              string        // "14:45": used if BVG is down, empty = off
 	SkipDates                  []string      // YYYY-MM-DD, e.g. kita closing days
-	NtfyServer, NtfyTopic      string
-	NtfyToken                  string // ntfy access token (tk_...), avoids per-IP quotas
+	TelegramToken              string        // bot token from @BotFather
+	TelegramChats              []string      // chat IDs to notify
+	StateBucket                string        // GCS bucket holding the "last-sent" date
+	Test                       bool          // TEST=1: send a test message only
 	BVGAPI                     string
 	DryRun                     bool
 	Now                        string // override for testing, "2006-01-02T15:04"
@@ -62,24 +64,37 @@ func loadConfig() Config {
 		Buffer:        mustMinutes("BUFFER_MIN", "5"),
 		Lead:          mustMinutes("LEAD_MIN", "10"),
 		FallbackLeave: os.Getenv("FALLBACK_LEAVE"),
-		NtfyServer:    strings.TrimRight(env("NTFY_SERVER", "https://ntfy.sh"), "/"),
-		NtfyTopic:     os.Getenv("NTFY_TOPIC"),
-		NtfyToken:     os.Getenv("NTFY_TOKEN"),
+		TelegramToken: os.Getenv("TELEGRAM_TOKEN"),
+		StateBucket:   os.Getenv("STATE_BUCKET"),
+		Test:          os.Getenv("TEST") == "1",
 		BVGAPI:        strings.TrimRight(env("BVG_API", "https://v6.bvg.transport.rest"), "/"),
 		DryRun:        os.Getenv("DRY_RUN") == "1",
 		Now:           os.Getenv("NOW"),
 	}
-	if s := os.Getenv("SKIP_DATES"); s != "" {
-		for _, d := range strings.Split(s, ",") {
-			cfg.SkipDates = append(cfg.SkipDates, strings.TrimSpace(d))
-		}
+	cfg.SkipDates = splitList(os.Getenv("SKIP_DATES"))
+	cfg.TelegramChats = splitList(os.Getenv("TELEGRAM_CHAT_IDS"))
+	required := map[string]string{"FROM_LAT": cfg.FromLat, "FROM_LON": cfg.FromLon, "TO_LAT": cfg.ToLat, "TO_LON": cfg.ToLon}
+	if !cfg.DryRun {
+		required["TELEGRAM_TOKEN"] = cfg.TelegramToken
+		required["TELEGRAM_CHAT_IDS"] = strings.Join(cfg.TelegramChats, ",")
+		required["STATE_BUCKET"] = cfg.StateBucket
 	}
-	for k, v := range map[string]string{"FROM_LAT": cfg.FromLat, "FROM_LON": cfg.FromLon, "TO_LAT": cfg.ToLat, "TO_LON": cfg.ToLon, "NTFY_TOPIC": cfg.NtfyTopic} {
+	for k, v := range required {
 		if v == "" {
 			log.Fatalf("missing env %s", k)
 		}
 	}
 	return cfg
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // atClock returns today's date (in now's location) at "HH:MM".
@@ -118,10 +133,9 @@ func buildMessage(cfg Config, j Journey, now time.Time) Message {
 	ride := j.FirstRide()
 	leave := j.LeaveAt().In(now.Location())
 	title := "Leave for Kita at " + hm(leave)
-	prio := "high"
-	if !now.Before(leave) {
+	urgent := !now.Before(leave)
+	if urgent {
 		title = "Leave for Kita NOW"
-		prio = "urgent"
 	}
 	delay := ""
 	if ride.DepartureDelay != nil && *ride.DepartureDelay >= 60 {
@@ -141,11 +155,10 @@ func buildMessage(cfg Config, j Journey, now time.Time) Message {
 	}
 	fmt.Fprintf(&b, "Arrive at kita %s", hm(j.ArriveAt().In(now.Location())))
 	return Message{
-		Title:    title,
-		Body:     b.String(),
-		Priority: prio,
-		Tags:     []string{"tram", sentTag},
-		Click:    mapsLink(cfg),
+		Title:  title,
+		Body:   b.String(),
+		Urgent: urgent,
+		Link:   mapsLink(cfg),
 	}
 }
 
@@ -169,19 +182,26 @@ func run(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("NOW: %w", err)
 		}
 	}
+	c := &http.Client{Timeout: 20 * time.Second}
+	if cfg.Test {
+		// Does not touch the state, so it never suppresses the real reminder.
+		return sendTelegram(ctx, c, cfg, Message{
+			Title: "Test from the kita reminder",
+			Body:  "Setup works. On weekdays you'll get a message here about 10 min before you need to leave.",
+			Link:  mapsLink(cfg),
+		})
+	}
 	if r := skipReason(now, cfg.SkipDates); r != "" {
 		log.Printf("no pickup today (%s)", r)
 		return nil
 	}
-
-	c := &http.Client{Timeout: 20 * time.Second}
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	today := now.Format("2006-01-02")
 	if !cfg.DryRun {
-		sent, err := alreadySent(ctx, c, cfg, midnight)
+		last, err := lastSent(ctx, c, cfg)
 		if err != nil {
-			return fmt.Errorf("checking ntfy: %w", err)
+			return fmt.Errorf("checking state: %w", err)
 		}
-		if sent {
+		if last == today {
 			log.Printf("push already sent today")
 			return nil
 		}
@@ -210,7 +230,7 @@ func run(ctx context.Context, cfg Config) error {
 		log.Printf("too early: push at %s", hm(leave.Add(-cfg.Lead)))
 		return nil
 	}
-	return send(ctx, c, cfg, buildMessage(cfg, j, now))
+	return send(ctx, c, cfg, today, buildMessage(cfg, j, now))
 }
 
 // fallback sends a generic reminder if BVG data is unavailable and we are
@@ -227,24 +247,26 @@ func fallback(ctx context.Context, c *http.Client, cfg Config, now time.Time, ca
 		return fmt.Errorf("%w (fallback push at %s)", cause, hm(leave.Add(-cfg.Lead)))
 	}
 	log.Printf("BVG unavailable (%v), sending fallback", cause)
-	return send(ctx, c, cfg, Message{
-		Title:    "Leave for Kita at " + hm(leave),
-		Body:     "No live BVG data right now - leaving at the usual time. Check the BVG app.",
-		Priority: "high",
-		Tags:     []string{"warning", sentTag},
-		Click:    mapsLink(cfg),
+	return send(ctx, c, cfg, now.Format("2006-01-02"), Message{
+		Title: "Leave for Kita at " + hm(leave),
+		Body:  "No live BVG data right now - leaving at the usual time. Check the BVG app.",
+		Link:  mapsLink(cfg),
 	})
 }
 
-func send(ctx context.Context, c *http.Client, cfg Config, m Message) error {
+// send delivers m, then records today as done so later runs stay quiet.
+func send(ctx context.Context, c *http.Client, cfg Config, today string, m Message) error {
 	if cfg.DryRun {
-		log.Printf("DRY RUN push [%s] %s\n%s", m.Priority, m.Title, m.Body)
+		log.Printf("DRY RUN message:\n%s", telegramText(m))
 		return nil
 	}
-	if err := publish(ctx, c, cfg, m); err != nil {
+	if err := sendTelegram(ctx, c, cfg, m); err != nil {
 		return err
 	}
-	log.Printf("push sent: %s", m.Title)
+	log.Printf("message sent: %s", m.Title)
+	if err := markSent(ctx, c, cfg, today); err != nil {
+		return fmt.Errorf("sent, but %w (next run may send again)", err)
+	}
 	return nil
 }
 
