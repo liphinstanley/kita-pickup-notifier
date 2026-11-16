@@ -15,7 +15,8 @@ g() { gcloud --project "$PROJECT" --quiet "$@"; }
 
 echo "== project"
 gcloud projects describe "$PROJECT" >/dev/null 2>&1 || gcloud projects create "$PROJECT" --name "kita-pickup"
-gcloud billing projects link "$PROJECT" --billing-account "$BILLING_ACCOUNT" >/dev/null
+[ "$(gcloud billing projects describe "$PROJECT" --format='value(billingEnabled)')" = "True" ] ||
+  gcloud billing projects link "$PROJECT" --billing-account "$BILLING_ACCOUNT" >/dev/null
 g services enable run.googleapis.com cloudscheduler.googleapis.com artifactregistry.googleapis.com storage.googleapis.com
 
 echo "== artifact registry"
